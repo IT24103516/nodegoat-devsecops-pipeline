@@ -67,9 +67,19 @@ const index = (app, db) => {
     app.post("/memos", isLoggedIn, memosHandler.addMemos);
 
     // Handle redirect for learning resources link
+    // Fix for A10 - Unvalidated Redirect: only allow http(s) targets on an allow-list
     app.get("/learn", isLoggedIn, (req, res) => {
-        // Insecure way to handle redirects by taking redirect url from query string
-        return res.redirect(req.query.url);
+        const allowedHosts = ["www.khanacademy.org"];
+        let target;
+        try {
+            target = new URL(req.query.url);
+        } catch (e) {
+            return res.status(400).send("Invalid redirect URL");
+        }
+        if (!["http:", "https:"].includes(target.protocol) || !allowedHosts.includes(target.hostname)) {
+            return res.status(400).send("Redirect target not allowed");
+        }
+        return res.redirect(target.toString());
     });
 
     // Research Page

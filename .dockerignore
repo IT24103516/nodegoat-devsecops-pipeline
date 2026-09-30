@@ -4,3 +4,17 @@ docker-compose.yml
 .git
 .github
 .gitignore
+# Secrets / environment files
+.env
+.env.*
+
+# Private keys
+*.key
+*.pem
+*.p12
+*.pfx
+
+artifacts/cert/*.key
+artifacts/cert/*.pem
+
+secrets/

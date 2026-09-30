@@ -9,6 +9,7 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -21,9 +22,19 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Verify application secrets
+        env:
+          COOKIE_SECRET: ${{ secrets.COOKIE_SECRET }}
+          CRYPTO_KEY: ${{ secrets.CRYPTO_KEY }}
+        run: |
+          test -n "$COOKIE_SECRET"
+          test -n "$CRYPTO_KEY"
+          echo "Required application secrets are available to the CI pipeline."
+
   sast:
     runs-on: ubuntu-latest
     needs: build-and-test
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -38,6 +49,7 @@ jobs:
   dependency-scan:
     runs-on: ubuntu-latest
     needs: build-and-test
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -55,6 +67,7 @@ jobs:
 
   secrets-scan:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -69,6 +82,7 @@ jobs:
   container-scan:
     runs-on: ubuntu-latest
     needs: build-and-test
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

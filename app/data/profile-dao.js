@@ -1,112 +1,130 @@
-/* The ProfileDAO must be constructed with a connected database object */
-function ProfileDAO(db) {
+const crypto = require("crypto");
 
+function ProfileDAO(db) {
     "use strict";
 
-    /* If this constructor is called without the "new" operator, "this" points
-     * to the global object. Log a warning and call it correctly. */
-    if (false === (this instanceof ProfileDAO)) {
-        console.log("Warning: ProfileDAO constructor called without 'new' operator");
+    if (!(this instanceof ProfileDAO)) {
         return new ProfileDAO(db);
     }
 
     const users = db.collection("users");
+    const keyHex = process.env.PROFILE_ENCRYPTION_KEY;
 
-    /* Fix for A6 - Sensitive Data Exposure
+    if (!keyHex || !/^[a-fA-F0-9]{64}$/.test(keyHex)) {
+        throw new Error(
+            "PROFILE_ENCRYPTION_KEY must contain 64 hexadecimal characters"
+        );
+    }
 
-    // Use crypto module to save sensitive data such as ssn, dob in encrypted format
-    const crypto = require("crypto");
-    const config = require("../../config/config");
+    const key = Buffer.from(keyHex, "hex");
 
-    /// Helper method create initialization vector
-    // By default the initialization vector is not secure enough, so we create our own
-    const createIV = () => {
-        // create a random salt for the PBKDF2 function - 16 bytes is the minimum length according to NIST
-        const salt = crypto.randomBytes(16);
-        return crypto.pbkdf2Sync(config.cryptoKey, salt, 100000, 512, "sha512");
+    const encrypt = (value, userId, field) => {
+        const iv = crypto.randomBytes(12);
+        const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+
+        cipher.setAAD(Buffer.from(`${userId}:${field}`, "utf8"));
+
+        const encrypted = Buffer.concat([
+            cipher.update(String(value), "utf8"),
+            cipher.final()
+        ]);
+
+        return [
+            "v1",
+            iv.toString("hex"),
+            cipher.getAuthTag().toString("hex"),
+            encrypted.toString("hex")
+        ].join(":");
     };
 
-    // Helper methods to encryt / decrypt
-    const encrypt = (toEncrypt) => {
-        config.iv = createIV();
-        const cipher = crypto.createCipheriv(config.cryptoAlgo, config.cryptoKey, config.iv);
-        return `${cipher.update(toEncrypt, "utf8", "hex")} ${cipher.final("hex")}`;
+    const decrypt = (value, userId, field) => {
+        if (!value) return "";
+
+        // Temporary compatibility for existing plaintext records.
+        // These records must be migrated or saved again.
+        if (!value.startsWith("v1:")) return value;
+
+        const parts = value.split(":");
+
+        if (
+            parts.length !== 4 ||
+            !/^[a-fA-F0-9]{24}$/.test(parts[1]) ||
+            !/^[a-fA-F0-9]{32}$/.test(parts[2]) ||
+            !/^(?:[a-fA-F0-9]{2})*$/.test(parts[3])
+        ) {
+            throw new Error("Invalid encrypted profile value");
+        }
+
+        const decipher = crypto.createDecipheriv(
+    "aes-256-gcm",
+    key,
+    Buffer.from(parts[1], "hex"),
+    { authTagLength: 16 }
+);
+
+        decipher.setAAD(Buffer.from(`${userId}:${field}`, "utf8"));
+        decipher.setAuthTag(Buffer.from(parts[2], "hex"));
+
+        return Buffer.concat([
+            decipher.update(Buffer.from(parts[3], "hex")),
+            decipher.final()
+        ]).toString("utf8");
     };
 
-    const decrypt = (toDecrypt) => {
-        const decipher = crypto.createDecipheriv(config.cryptoAlgo, config.cryptoKey, config.iv);
-        return `${decipher.update(toDecrypt, "hex", "utf8")} ${decipher.final("utf8")}`;
-    };
-    */
-
-    this.updateUser = (userId, firstName, lastName, ssn, dob, address, bankAcc, bankRouting, callback) => {
-
-        // Create user document
+    this.updateUser = (
+        userId, firstName, lastName, ssn, dob,
+        address, bankAcc, bankRouting, callback
+    ) => {
+        const id = parseInt(userId, 10);
         const user = {};
-        if (firstName) {
-            user.firstName = firstName;
-        }
-        if (lastName) {
-            user.lastName = lastName;
-        }
-        if (address) {
-            user.address = address;
-        }
-        if (bankAcc) {
-            user.bankAcc = bankAcc;
-        }
-        if (bankRouting) {
-            user.bankRouting = bankRouting;
-        }
-        if (ssn) {
-            user.ssn = ssn;
-        }
-        if (dob) {
-            user.dob = dob;
-        }
-        /*
-        // Fix for A7 - Sensitive Data Exposure
-        // Store encrypted ssn and DOB
-        if(ssn) {
-            user.ssn = encrypt(ssn);
-        }
-        if(dob) {
-            user.dob = encrypt(dob);
-        }
-        */
 
-        users.update({
-                _id: parseInt(userId)
-            }, {
-                $set: user
-            },
+        try {
+            if (firstName) user.firstName = firstName;
+            if (lastName) user.lastName = lastName;
+            if (address) user.address = address;
+            if (bankAcc) user.bankAcc = bankAcc;
+            if (bankRouting) user.bankRouting = bankRouting;
+
+            // Encrypt sensitive fields before database storage.
+            if (ssn) user.ssn = encrypt(ssn, id, "ssn");
+            if (dob) user.dob = encrypt(dob, id, "dob");
+        } catch (error) {
+            return callback(error, null);
+        }
+
+        users.update(
+            { _id: id },
+            { $set: user },
             err => {
-                if (!err) {
-                    console.log("Updated user profile");
-                    return callback(null, user);
-                }
+                if (err) return callback(err, null);
 
-                return callback(err, null);
+                // Return readable values to the profile page.
+                const displayUser = { ...user };
+                if (ssn) displayUser.ssn = ssn;
+                if (dob) displayUser.dob = dob;
+
+                return callback(null, displayUser);
             }
         );
     };
 
     this.getByUserId = (userId, callback) => {
-        users.findOne({
-                _id: parseInt(userId)
-            },
-            (err, user) => {
-                if (err) return callback(err, null);
-                /*
-                // Fix for A6 - Sensitive Data Exposure
-                // Decrypt ssn and DOB values to display to user
-                user.ssn = user.ssn ? decrypt(user.ssn) : "";
-                user.dob = user.dob ? decrypt(user.dob) : "";
-                */
+        const id = parseInt(userId, 10);
 
-                callback(null, user);
+        users.findOne({ _id: id }, (err, user) => {
+            if (err) return callback(err, null);
+            if (!user) return callback(null, null);
+
+            try {
+                const displayUser = { ...user };
+                displayUser.ssn = decrypt(user.ssn, id, "ssn");
+                displayUser.dob = decrypt(user.dob, id, "dob");
+
+                return callback(null, displayUser);
+            } catch (error) {
+                return callback(error, null);
             }
-        );
+        });
     };
 }
 
